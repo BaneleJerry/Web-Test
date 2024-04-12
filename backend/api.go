@@ -1,88 +1,62 @@
 package main
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
+	"database/sql"
+	"fmt"
+	"log"
 	"net/http"
 	"time"
 
 	"github.com/BaneleJerry/Web-Test/internal/database"
-	"github.com/google/uuid"
+	"github.com/gorilla/mux"
+	_ "github.com/lib/pq" // PostgreSQL driver
 )
 
-func generateAPIKey() (string, error) {
-	// Generate a random byte slice to be used as the API key
-	key := make([]byte, 32)
-	_, err := rand.Read(key)
-	if err != nil {
-		return "", err
-	}
-
-	// Encode the byte slice using base64 encoding
-	apiKey := base64.StdEncoding.EncodeToString(key)
-
-	return apiKey, nil
+type apiConfig struct {
+	port string
+	DB   *database.Queries
 }
 
-func GenerateAPIKeyHash(apiKey string) (string, []byte, error) {
-	// Generate a random salt
-	salt := make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil {
-		return "", nil, err
+func newApiServer(port string, db *sql.DB) *apiConfig {
+	return &apiConfig{
+		port: port,
+		DB:   database.New(db),
 	}
-
-	// Append salt to the API key
-	apiKeyWithSalt := []byte(apiKey)
-	apiKeyWithSalt = append(apiKeyWithSalt, salt...)
-
-	// Hash the API key with salt using SHA-256
-	hash := sha256.Sum256(apiKeyWithSalt)
-
-	// Encode the hash to base64
-	encodedHash := base64.URLEncoding.EncodeToString(hash[:])
-
-	return encodedHash, salt, nil
 }
 
-func (cfg *apiConfig) setApiKey(r *http.Request, user database.User) error {
+func (cfg *apiConfig) apiRun() {
+	router := mux.NewRouter()
 
-	apiKey, err := generateAPIKey()
-	if err != nil {
-		return err
+	// Your routing logic goes here-
+
+	// router.HandleFunc("/logout", Chain(cfg.LogoutHandler, Logging(), Method("GET")))
+
+	router.HandleFunc("/login", Chain(cfg.handleLogin, Logging(), Method("POST")))
+	router.HandleFunc("/signup", Chain(cfg.handleRegister, Logging(), Method("POST")))
+	// r.HandleFunc("/auth/authStatus", Chain(cfg.handleAuthStatus, Logging(), Method("Get")))
+	router.HandleFunc("/rr",cfg.withJWTAuth(func(w http.ResponseWriter, r *http.Request) {}))
+	//routing End/Up
+	corsMux := middlewareCors(router)
+	srv := &http.Server{
+		Addr:         ":" + cfg.port,
+		Handler:      corsMux,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
 	}
+	fmt.Println("Server Started listening on", port)
+	log.Fatal(srv.ListenAndServe())
+}
 
-	// Hash the API key
-	hashedApiKey, salt, err := GenerateAPIKeyHash(apiKey)
-	if err != nil {
-		return err
-	}
-
-	// Calculate expiration time (90 days from now)
-	expirationTime := time.Now().Add(90 * 24 * time.Hour)
-
-	// Insert the API key into the database
-	_, err = cfg.DB.InsertAPIKey(r.Context(), database.InsertAPIKeyParams{
-		ID:             uuid.New(),
-		UserID:         user.ID,
-		ApiKeyValue:    []byte(hashedApiKey),
-		Salt:           salt,
-		ExpirationTime: expirationTime,
-		CreatedAt:      time.Now(),
+func middlewareCors(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
+		w.Header().Set("Access-Control-Allow-Headers", "*")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (cfg *apiConfig) getApiKey(r http.Request, user database.User) (database.ApiKey, error) {
-
-	apikey, err := cfg.DB.SelectAPIKeysByUserID(r.Context(), user.ID)
-	if err != nil {
-		return database.ApiKey{}, err
-	}
-
-	return apikey, nil
 }
