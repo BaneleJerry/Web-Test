@@ -1,1 +1,3 @@
 .vscode
+backend/.env
+backend/bin/web-test
